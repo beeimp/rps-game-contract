@@ -19,7 +19,9 @@ contract RPS {
     struct Game {
         Player representative;
         Player challenger;
+        bytes32 encryptHand;
         uint8 win; // 방장기준 : 0 - 승리, 1 - 패배, 2 - 비김
+        uint8 status; // 0 - 준비상태, 1 - 결과대기상태
     }
     // 게임방
     mapping(uint256 => Game) rooms;
@@ -40,24 +42,25 @@ contract RPS {
 
     /* 가위바위보 게임을 하기 위한 방 */
     // 방장은 인자로 자신이 낼 가위/바위/보 값과 베팅 금액을 넘겨줍니다.
-    function createRoom(Hand _hand)
+    function createRoom(bytes32 _encryptHand)
         public
         payable
-        isHand(_hand)
         returns (uint256 _roomNumber)
     {
         rooms[roomNumber] = Game({
+            encryptHand: _encryptHand,
             representative: Player({
                 addr: payable(msg.sender),
-                hand: _hand,
+                hand: Hand.ROCK,
                 batting: msg.value
             }),
             challenger: Player({
                 addr: payable(msg.sender),
-                hand: _hand,
+                hand: Hand.ROCK,
                 batting: 0
             }),
-            win: 2 // 비김
+            win: 2, // 비긴상태
+            status: 0 // 준비상태
         });
         _roomNumber = roomNumber++;
     }
@@ -99,15 +102,34 @@ contract RPS {
         _win = rooms[_roomNumber].win;
     }
 
+    // 방장이 제시한 값 확인
+    function checkHand(
+        uint256 _roomNumber,
+        Hand _hand,
+        uint256 _nonce
+    ) public isHand(_hand) isRoom(_roomNumber) returns (bool) {
+        require(rooms[_roomNumber].status == 0);
+        uint256 _value = uint256(_hand) + _nonce;
+        bytes32 _encryptHand = keccak256(abi.encode(_value));
+        if (_encryptHand == rooms[_roomNumber].encryptHand) {
+            rooms[_roomNumber].representative.hand = _hand;
+            rooms[_roomNumber].status = 1; // 결과 대기
+            return true;
+        } else {
+            return false;
+        }
+    }
+
     // 게임의 결과에 따라 베팅 금액을 송금
     function payout(uint256 _roomNumber) public isRoom(_roomNumber) {
+        require(rooms[_roomNumber].status == 1);
         // 방장이 이긴 경우
         if (rooms[_roomNumber].win == 1) {
             rooms[_roomNumber].representative.addr.transfer(
                 rooms[_roomNumber].representative.batting +
                     rooms[_roomNumber].challenger.batting
             );
-        // 비긴 경우
+            // 비긴 경우
         } else if (rooms[_roomNumber].win == 2) {
             rooms[_roomNumber].representative.addr.transfer(
                 rooms[_roomNumber].representative.batting
@@ -115,7 +137,7 @@ contract RPS {
             rooms[_roomNumber].challenger.addr.transfer(
                 rooms[_roomNumber].challenger.batting
             );
-        // 방장이 진 경우
+            // 방장이 진 경우
         } else {
             rooms[_roomNumber].challenger.addr.transfer(
                 rooms[_roomNumber].representative.batting +
